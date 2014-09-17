@@ -120,6 +120,8 @@ test_list_directory
 
 test_read
 
+test_delete_directory
+
 test_checksum
 
 cleanup
