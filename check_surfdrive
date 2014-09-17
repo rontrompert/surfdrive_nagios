@@ -1,0 +1,130 @@
+#!/bin/bash
+
+# Ron Trompert, september 2014
+#
+# Description:
+#
+# This plugin checks if the SURFdrive service is running properly.
+
+# Nagios return codes
+STATE_OK=0
+STATE_WARNING=1
+STATE_CRITICAL=2
+STATE_UNKNOWN=3
+STATE_DEPENDENT=4
+
+CHECK_NAME="SURFDRIVE"
+LOGFILE=/path/to/logfile
+USER=e@pp.nl
+PASSWD=passwd
+REMOTE_SERVER=surfdrive.verweggistan.nl
+STORAGE_PATH=/remote.php/nonshib-webdav
+PROTOCOL=https
+SITE=${PROTOCOL}://${REMOTE_SERVER}/${STORAGE_PATH}
+OPTIONS="-s -S -k -H \"Expect:\""
+CURL=curl
+
+#Create a 1 MB file.
+TESTFILE_SIZE=1048576
+
+TMPFILE1=`mktemp -q`
+TMPFILE2="/tmp/testfile"`date +%s`
+${CURL} ${OPTIONS} --user ${USER}:${PASSWD} -X DELETE -L ${SITE}/testdir/ >/dev/null 2>&1
+
+log () {
+
+   timestamp=`date --rfc-3339=seconds`
+   echo $timestamp $1 >>${LOGFILE}
+
+}
+
+cleanup () {
+   rm -f $TMPFILE1 >/dev/null 2>&1
+   rm -f $TMPFILE2 >/dev/null 2>&1
+   ${CURL} ${OPTIONS} --user ${USER}:${PASSWD} -X DELETE -L ${SITE}/testdir/ >/dev/null 2>&1
+}
+
+create_testfile () {
+# This function creates a testfile to write to SURFdrive
+   dd if=/dev/random of=$TMPFILE1 bs=$TESTFILE_SIZE count=1 >/dev/null 2>&1
+   if [ "x$?" != "x0" ]; then
+       cleanup
+       exit $STATE_WARNING
+   fi
+}
+
+test_create_directory () {
+   ${CURL} ${OPTIONS} --user ${USER}:${PASSWD} -X MKCOL -L ${SITE}/testdir/ >/dev/null 2>&1
+   if [ "x$?" != "x0" ]; then
+       cleanup
+       log "test_create_directory failed"
+       exit $STATE_CRITICAL
+   fi
+}
+
+test_delete_directory () {
+   ${CURL} ${OPTIONS} --user ${USER}:${PASSWD} -X DELETE -L ${SITE}/testdir/ >/dev/null 2>&1
+   if [ "x$?" != "x0" ]; then
+       cleanup
+       log "test_delete_directory failed"
+       exit $STATE_CRITICAL
+   fi
+}
+
+test_list_directory () {
+   listing=`${CURL} ${OPTIONS} --user ${USER}:${PASSWD} -L ${SITE}/testdir/ | grep sabreAction | grep -v favicon | sed 's/.*href\=\"//' | sed 's/\".*//' | grep testfile 2>&1`
+   if [ "x$listing" == "x" ]; then
+       cleanup
+       log "test_list_directory failed"
+       exit $STATE_CRITICAL
+   fi
+}
+
+test_read () {
+# Client read test
+   ${CURL} ${OPTIONS} --user $USER:$PASSWD -L ${SITE}/testdir/testfile -o $TMPFILE2 >/dev/null 2>&1
+   if [ "x$?" != "x0" ]; then
+       cleanup
+       log "test_read failed"
+       exit $STATE_CRITICAL
+   fi
+}
+
+test_write () {
+# Client write test
+   ${CURL} ${OPTIONS} --user $USER:$PASSWD -T ${TMPFILE1} -L ${SITE}/testdir/testfile >/dev/null 2>&1
+   if [ "x$?" != "x0" ]; then
+       cleanup
+       log "test_write failed"
+       exit $STATE_CRITICAL
+   fi
+}
+
+test_checksum () {
+   MD5_1=`md5sum ${TMPFILE1}| awk '{print $1}'`
+   MD5_2=`md5sum ${TMPFILE2}| awk '{print $1}'`
+   if [ "x${MD5_1}" != "x${MD5_2}" ]; then
+       cleanup
+       log "test_checksum failed"
+       exit $STATE_CRITICAL
+   fi
+}
+
+create_testfile
+
+test_create_directory
+
+test_write
+
+test_list_directory
+
+test_read
+
+test_checksum
+
+cleanup
+
+#All's well that ends well!
+log "OK"
+
+exit $STATE_OK
